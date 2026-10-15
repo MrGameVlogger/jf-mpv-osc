@@ -7,7 +7,7 @@ button, and thumbnail seek previews.
 
 It was written for [jellyfin-mpv-shim](https://github.com/jellyfin/jellyfin-mpv-shim)
 and retired there on 2026-07-19 (commit `0e438101`) once the in-window mpvtk HUD
-reached parity. Nothing about it is shim-specific: it talks to its host over six
+reached parity. Nothing about it is shim-specific: it talks to its host over seven
 `script-message` names and degrades to a working generic OSC if nobody answers.
 
 **It is a good fit for a host that launches mpv as a separate process.** All of
@@ -18,7 +18,7 @@ script adds zero platform surface: it is the same Lua on every OS.
 ## Contents
 
 ```
-trickplay-jf-osc.lua        the OSC (4637 lines)
+trickplay-jf-osc.lua        the OSC (4771 lines)
 gen_osc_icons.py            regenerates the embedded icon table from Material SVGs
 tools/osc-test/             headless screenshot + click-routing harness (no host needed)
 ```
@@ -39,7 +39,11 @@ seek previews light up automatically — see *Optional integrations* below.
 
 With no host talking to it at all, the script still works: the sheets fall back
 to mpv's own `track-list`, and the Jellyfin-specific buttons (favorite,
-next/prev item, skip segment, SyncPlay) hide themselves.
+next/prev item, skip segment, SyncPlay) hide themselves. The back arrow and
+window close quit mpv directly, the gear sheet offers a local Screenshot and a
+"Quit Without Saving Position" (suppresses mpv's watch-later write and drops the
+saved one), and the subtitle sheet's Size/Position/Color rows edit mpv's own
+`sub-scale`/`sub-pos`/`sub-color`.
 
 ---
 
@@ -59,10 +63,11 @@ itself. **Zero host code.**
 For most projects this is the bulk of the visible win. Everything below is
 optional refinement.
 
-### Tier 1 — name the tracks, and `shim-close`
+### Tier 1 — name the tracks
 
 Push `shim-jf-osc-state` with four keys: `strings: {}`, `has_media`,
-`subtitles`, `audio`. Wire `shim-close` to whatever closing means for you.
+`subtitles`, `audio`. Wire `shim-close` if you want a close-time hook — the
+OSC quits mpv itself either way, so the buttons work at Tier 0.
 
 **This is the highest value-per-line item in the contract**, because track
 naming is the one thing the Tier 0 fallback genuinely cannot do. Jellyfin serves
@@ -98,7 +103,8 @@ skin and starts being a client surface — which is worth it only if you want th
 `profiles` with scopes, `syncplay`, `sub_style`, `secondary_subtitles`.
 
 These assume the host owns transcode negotiation, shader-profile management, and
-SyncPlay group membership. Sensible for a client built around mpv; probably not
+SyncPlay group membership. Without a host, `sub_style` still appears and edits
+mpv's own `sub-scale`/`sub-pos`/`sub-color`. Sensible for a client built around mpv; probably not
 for a client that wants to stay thin.
 
 ### The one architectural question
@@ -127,7 +133,7 @@ decide which buttons exist at all).
 {
   "strings": { /* see below */ },
   "has_media": true,             // false => everything below may be absent
-  "allow_screenshot": true,      // draws the screenshot row in the gear sheet
+  "allow_screenshot": true,      // false hides the screenshot row (it exists with a local action when no state is pushed)
   "favorite": false,             // heart button fill state
   "queue": { "has_prev": true, "has_next": true },
 
@@ -168,8 +174,10 @@ Notes that will save you time:
   translations. Keys: `off`, `none`, `unknown`, `ends_at` (a format string whose
   `{0}` has already been replaced by `%s`), `quality`, `speed`, `aspect`,
   `aspect_auto`, `profile`, `stats`, `screenshot`, `unwatched`, `sub_size`,
-  `sub_position`, `sub_color`, `sp_disabled`, `sp_new`. Send `{}` and it falls
-  back to English.
+  `sub_position`, `sub_color`, `sp_disabled`, `sp_new`, and the no-host
+  fallback labels `quit_nosave`, `tiny`, `small`, `normal`, `large`, `huge`,
+  `top`, `middle`, `bottom`, `white`, `yellow`, `green`, `cyan`, `red`. Send
+  `{}` and it falls back to English.
 - Option **labels are pre-formatted by the host** — the OSC does no string
   building beyond `strings` lookups.
 
@@ -193,6 +201,12 @@ Pressing it emits the `skip-segment` action; the host performs the actual seek.
 One argument: `sub`, `audio`, or `settings`. Shows the OSC and toggles that
 action sheet. Intended for host key bindings and remote-control commands.
 
+### `shim-jf-osc-close` — close from outside the OSC
+
+No arguments. Runs the same path as the close button and back arrow: quits mpv
+and emits `shim-close`. Intended for host key bindings and remote-control
+commands.
+
 ---
 
 ## OSC → Host
@@ -200,7 +214,7 @@ action sheet. Intended for host key bindings and remote-control commands.
 ### `shim-jf-osc-action` — the verb channel
 
 `script-message shim-jf-osc-action <verb> [arg]`. Every interactive control
-routes through here. The OSC changes no playback state itself (one exception,
+routes through here. The OSC changes no playback state itself (two exceptions,
 noted below) — it reports intent and waits for the next state push.
 
 | Verb | Arg | Meaning |
@@ -223,7 +237,7 @@ noted below) — it reports intent and waits for the next state push.
 | `skip-segment` | — | the skip button was pressed |
 | `set-fullscreen` | `yes` / `no` | **notification, not a request** (see below) |
 | `screenshot` | — | take a screenshot |
-| `unwatched-quit` | — | quit and mark unwatched |
+| `unwatched-quit` | — | quit and mark unwatched (leave no resume position) |
 
 Unknown verbs should be logged and ignored; the OSC never waits for a reply.
 
@@ -231,7 +245,8 @@ The two `-refresh` / `-scopes` verbs exist because those two menus need data tha
 costs a network request. They fire when the sheet *opens*, so the host can fetch
 off the render path and let the result arrive in a later state push.
 
-**`set-fullscreen` is the one exception to "the OSC changes nothing."** It
+**`set-fullscreen` is one of two exceptions to "the OSC changes nothing"** (the
+other is `shim-close`, below). It
 toggles mpv's `fullscreen` property locally first — so the button still works
 with no host attached — and then reports the new state. Treat it as recording
 user intent: without it, a host with auto-fullscreen keeps re-fullscreening every
@@ -251,8 +266,10 @@ if you do.
 ### `shim-close` — user asked to close
 
 No arguments. Fired by the window-controls close button and the back arrow. The
-host decides what closing means (stop playback, quit mpv, return to a library
-view).
+OSC quits mpv itself — the buttons must work with no host attached — and emits
+this first, so the host can do close-time bookkeeping (stop playback, report
+watched state, release device sessions). Treat it as a notification like
+`set-fullscreen`: the exit is already underway when it arrives.
 
 ---
 
