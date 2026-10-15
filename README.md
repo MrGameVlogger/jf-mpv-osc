@@ -18,7 +18,8 @@ script adds zero platform surface: it is the same Lua on every OS.
 ## Contents
 
 ```
-trickplay-jf-osc.lua        the OSC (4771 lines)
+trickplay-jf-osc.lua        the Jellyfin-styled OSC (4771 lines) — the contract below
+trickplay-osc.lua           vanilla-styled sibling: stock osc.lua + thumbnails (2984 lines)
 gen_osc_icons.py            regenerates the embedded icon table from Material SVGs
 tools/osc-test/             headless screenshot + click-routing harness (no host needed)
 ```
@@ -340,11 +341,26 @@ the OSC.
 
 ---
 
+## The vanilla-styled sibling — `trickplay-osc.lua`
+
+The repo also ships mpv's stock `osc.lua` look — classic layout and colors —
+with thumbnail support patched in and one compatibility fix for newer mpv
+(`set_property(nil)`). Every hunk is marked `BEGIN patch` / `END patch` against
+upstream `osc.lua`; the thumbnail hunks are where `trickplay-jf-osc.lua`'s
+thumbnail support came from.
+
+There is no host contract in this one: no `shim-*` messages, nothing to wire.
+It speaks the same thumbfast protocol, so seek previews work identically. Load
+it the same way (`--script=/path/to/trickplay-osc.lua --osc=no`) and pick it
+when you want the familiar mpv OSC; pick `trickplay-jf-osc.lua` when you want
+the jellyfin-web look or host integration.
+
 ## Trying it without a host
 
 `tools/osc-test/` runs the real mpv binary under Xvfb, injects **real X11 input**
 with xdotool, and asserts over the JSON IPC socket. Needs `mpv`, `Xvfb`,
-`xdotool`, `socat`, `python3`.
+`xdotool`, `socat`, `python3`. Set `OSC_SCRIPT` to point it at
+`trickplay-osc.lua` to exercise the vanilla-styled sibling instead.
 
 ```bash
 tools/osc-test/osc-test.sh shot out.png            # screenshot the bar
